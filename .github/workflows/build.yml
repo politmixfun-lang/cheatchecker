@@ -1,0 +1,100 @@
+name: Сборка MineChecker
+
+# Собирает MineChecker.exe на серверах GitHub — своя Windows не нужна.
+# Запуск: вкладка Actions -> "Сборка MineChecker" -> Run workflow.
+# Готовый файл появится внизу страницы запуска, в разделе Artifacts.
+
+on:
+  workflow_dispatch:          # кнопка "Run workflow" вручную
+  push:
+    tags: ["v*"]              # пуш тега v1.0 -> ещё и релиз с файлами
+
+jobs:
+  windows:
+    name: Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller customtkinter
+
+      - name: Настройки (если не закоммичены)
+        shell: bash
+        run: |
+          if [ ! -f config.json ]; then cp config.example.json config.json; fi
+
+      - name: Сборка
+        run: python build.py
+
+      - name: Проверка, что файл собрался
+        shell: bash
+        run: |
+          ls -la dist
+          test -f dist/MineChecker.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MineChecker-Windows
+          path: dist/MineChecker.exe
+          retention-days: 90
+
+  macos:
+    name: macOS (.app)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller customtkinter
+
+      - name: Настройки (если не закоммичены)
+        run: |
+          if [ ! -f config.json ]; then cp config.example.json config.json; fi
+
+      - name: Сборка
+        run: python build.py
+
+      - name: Проверка, что файл собрался
+        run: |
+          ls -la dist
+          test -f dist/MineChecker.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MineChecker-macOS
+          path: dist/MineChecker.zip
+          retention-days: 90
+
+  release:
+    name: Релиз
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/MineChecker-Windows/MineChecker.exe
+            artifacts/MineChecker-macOS/MineChecker.zip
+          body: |
+            Mine Checker — проверка Minecraft на читы.
+
+            * `MineChecker.exe` — Windows, один файл, Python не нужен
+            * `MineChecker.zip` — macOS, внутри MineChecker.app

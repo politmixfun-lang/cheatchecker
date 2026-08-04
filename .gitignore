@@ -1,0 +1,26 @@
+# сборка
+build/
+dist/
+*.spec
+MineChecker.app/
+MineChecker-source-for-windows.zip
+
+# окружение
+.venv/
+__pycache__/
+*.pyc
+
+# отчёты и личные настройки
+reports/
+config.json
+
+# генерируемое
+assets/icon.iconset/
+.DS_Store
+
+# локальное и дубликаты
+.claude/
+MineChecker-source-for-windows/
+*[0-9].json
+config*.json
+!config.example.json

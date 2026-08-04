@@ -1,0 +1,30 @@
+{
+  "discord": {
+    "enabled": true,
+    "webhook_url": "https://discord.com/api/webhooks/ВАШ_ID/ВАШ_ТОКЕН",
+    "username": "Mine Checker",
+    "mention_role_id": ""
+  },
+  "telegram": {
+    "enabled": true,
+    "bot_token": "123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "chat_id": "-1001234567890"
+  },
+  "report": {
+    "dir": "reports",
+    "attach": [
+      "txt",
+      "html"
+    ]
+  },
+  "scan": {
+    "deep_jar_scan": true,
+    "max_jar_size_mb": 400,
+    "max_depth": 10,
+    "time_budget": 330,
+    "max_findings": 5000,
+    "usn_journal": false,
+    "spotlight": true,
+    "extra_paths": []
+  }
+}
