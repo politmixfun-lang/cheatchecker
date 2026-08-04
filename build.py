@@ -30,6 +30,14 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 NAME = "MineChecker"
 SEP = ";" if sys.platform.startswith("win") else ":"
 
+# Консоль Windows по умолчанию не в UTF-8, и русские строки роняют сборку
+# с UnicodeEncodeError. Переключаем вывод сами, чтобы это не зависело от среды.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HIDDEN = [
     "checker.scanners.traces_windows",
     "checker.scanners.traces_macos",
