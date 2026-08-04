@@ -209,3 +209,43 @@ def deliver(report: Report, cfg: dict, paths: dict):
     if not results:
         results.append(("—", False, "Ни один канал не включён в config.json"))
     return results
+
+
+def telegram_find_chats(token: str):
+    """
+    Находит chat_id всех бесед, где уже есть бот.
+
+    Telegram не позволяет узнать id группы по ссылке-приглашению: бота должен
+    добавить человек. Зато после добавления группа появляется в getUpdates —
+    отсюда и берём id, чтобы админу не искать его вручную.
+    """
+    token = (token or "").strip()
+    if not token:
+        return [], "Токен бота не указан"
+    try:
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/getUpdates?timeout=0&limit=100",
+            headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        return [], f"HTTP {e.code} — проверьте токен"
+    except Exception as e:
+        return [], str(e)
+
+    if not data.get("ok"):
+        return [], str(data.get("description", "Telegram вернул ошибку"))
+
+    chats = {}
+    for upd in data.get("result", []):
+        for key in ("message", "edited_message", "channel_post", "my_chat_member",
+                    "chat_member", "callback_query"):
+            item = upd.get(key) or {}
+            chat = item.get("chat") or (item.get("message") or {}).get("chat")
+            if chat and chat.get("id") is not None:
+                chats[chat["id"]] = (chat.get("title") or chat.get("username")
+                                     or chat.get("first_name") or chat.get("type", ""))
+    if not chats:
+        return [], ("Бесед не найдено. Добавьте бота в группу и напишите там любое "
+                    "сообщение, затем нажмите кнопку ещё раз.")
+    return [(cid, title) for cid, title in chats.items()], ""

@@ -11,6 +11,9 @@
                dist/MineChecker            — тот же чекер одним бинарником
     Linux   :  dist/MineChecker
 
+    python3 build.py --dir   собирает папку вместо одного файла:
+    антивирусы ругаются на неё заметно реже (см. раздел про антивирус в README).
+
 Важно: PyInstaller не умеет собирать под чужую ОС. Чтобы получить .exe,
 запустите этот скрипт на Windows; чтобы получить .app — на macOS.
 
@@ -59,7 +62,44 @@ def ensure_pyinstaller():
         return [sys.executable, "-m", "PyInstaller"]
 
 
+VERSION = "1.1.0"
+
+# Ресурс версии для .exe. Без него файл выглядит для антивируса как безымянный
+# бинарник неизвестного происхождения - это одна из главных причин ложных
+# срабатываний Windows Defender на программы, собранные PyInstaller.
+VERSION_INFO = """VSVersionInfo(
+  ffi=FixedFileInfo(filevers=(1,1,0,0), prodvers=(1,1,0,0), mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0,0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+        StringStruct('CompanyName', 'Mine Checker'),
+        StringStruct('FileDescription', 'Mine Checker - proverka Minecraft na chity'),
+        StringStruct('FileVersion', '%s'),
+        StringStruct('InternalName', 'MineChecker'),
+        StringStruct('LegalCopyright', 'Mine Checker'),
+        StringStruct('OriginalFilename', 'MineChecker.exe'),
+        StringStruct('ProductName', 'Mine Checker'),
+        StringStruct('ProductVersion', '%s')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+""" % (VERSION, VERSION)
+
+
+def write_version_file():
+    path = os.path.join(BASE, "version_info.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(VERSION_INFO)
+    return path
+
+
 def main():
+    # --dir собирает папку вместо одного файла. Это заметно снижает ложные
+    # срабатывания антивирусов: onefile-сборка при каждом запуске распаковывает
+    # себя во временную папку и запускает код оттуда, а такое поведение
+    # эвристики считают признаком дроппера.
+    onedir_flag = "--dir" in sys.argv
+
     cfg = os.path.join(BASE, "config.json")
     if not os.path.isfile(cfg):
         example = os.path.join(BASE, "config.example.json")
@@ -71,12 +111,15 @@ def main():
 
     # Windows/Linux: настоящий один файл. macOS: .app (иначе система блокирует
     # onefile-приложения с окном), который отдаём игроку одним архивом .zip.
-    mode = "--onedir" if sys.platform == "darwin" else "--onefile"
+    mode = "--onedir" if (sys.platform == "darwin" or onedir_flag) else "--onefile"
 
     cmd = ensure_pyinstaller() + [
         "--noconfirm", "--clean",
         mode,
         "--windowed",
+        # UPX-сжатие - самый частый повод для антивируса пометить файл как
+        # упакованный вредонос, поэтому его отключаем.
+        "--noupx",
         "--name", NAME,
         "--add-data", f"{cfg}{SEP}.",
         "--exclude-module", "numpy",
@@ -90,12 +133,28 @@ def main():
     if os.path.isfile(icon):
         cmd += ["--icon", icon]
 
+    if sys.platform.startswith("win"):
+        cmd += ["--version-file", write_version_file()]
+
     cmd.append(os.path.join(BASE, "main.py"))
 
     print("[i] Собираю:", " ".join(cmd[-6:]), "…")
     subprocess.check_call(cmd, cwd=BASE)
 
     dist = os.path.join(BASE, "dist")
+
+    # onedir на Windows - это папка; пакуем её в zip, чтобы игроку по-прежнему
+    # надо было скачать один файл.
+    folder = os.path.join(dist, NAME)
+    if onedir_flag and sys.platform != "darwin" and os.path.isdir(folder):
+        zip_path = os.path.join(dist, NAME + ".zip")
+        print("[i] Пакую папку в zip для отправки игроку…")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+            for root, _dirs, files in os.walk(folder):
+                for f in files:
+                    full = os.path.join(root, f)
+                    z.write(full, os.path.relpath(full, dist))
+
     app = os.path.join(dist, NAME + ".app")
     if sys.platform == "darwin" and os.path.isdir(app):
         zip_path = os.path.join(dist, NAME + ".zip")

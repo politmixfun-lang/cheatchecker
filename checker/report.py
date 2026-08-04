@@ -13,6 +13,10 @@ from datetime import datetime
 from . import signatures as sig
 from .utils import Finding
 
+LOCATION_RU = {"disk": "На компьютере", "deleted": "Удалён",
+               "renamed": "Переименован", "trace": "След"}
+LOCATION_ICON = {"disk": "💾", "deleted": "🗑", "renamed": "🎭", "trace": "👣"}
+
 VERDICTS = {
     "clean":     ("ЧИСТО",              "#2ecc71", "Читов не обнаружено."),
     "grey":      ("СЕРАЯ ЗОНА",         "#5ac8fa", "Найдены моды, запрещённые на части серверов."),
@@ -144,7 +148,7 @@ class Report:
                     L.append(f"### {sig.SEVERITY_RU[f.severity]} " + "#" * (w - 5 - len(sig.SEVERITY_RU[f.severity])))
                 L.append("")
                 L.append(f"[{i}] {f.title}")
-                L.append(f"    Категория: {f.category}")
+                L.append(f"    Категория: {f.category}   [{LOCATION_RU.get(f.location, f.location)}]")
                 if f.detail:
                     L.append(f"    Почему важно: {f.detail}")
                 if f.path:
@@ -160,36 +164,57 @@ class Report:
     # -----------------------------------------------------------------
     def to_html(self) -> str:
         e = html.escape
+        loc_counts = {k: 0 for k in LOCATION_RU}
+        for f in self.findings:
+            loc_counts[f.location] = loc_counts.get(f.location, 0) + 1
+
         rows = []
-        for i, f in enumerate(self.findings, 1):
+        for idx, f in enumerate(self.findings):
             color = sig.SEVERITY_COLOR.get(f.severity, "#888")
-            ev = "".join(f"<li>{e(str(x))}</li>" for x in f.evidence[:20])
+            ev = "".join(f"<li>{e(str(x))}</li>" for x in f.evidence[:40])
+            info = self._file_block(f)
+            haystack = e((f.title + " " + f.path + " " + f.category).lower())
             rows.append(f"""
-            <details class="card" style="--sev:{color}">
+            <details class="card" data-loc="{f.location}" data-sev="{f.severity}"
+                     data-search="{haystack}" style="--sev:{color}">
               <summary>
                 <span class="badge" style="background:{color}">{sig.SEVERITY_RU[f.severity]}</span>
+                <span class="loc" title="{LOCATION_RU.get(f.location, '')}">{LOCATION_ICON.get(f.location, '')} {LOCATION_RU.get(f.location, '')}</span>
                 <span class="ttl">{e(f.title)}</span>
                 <span class="cat">{e(f.category)}</span>
               </summary>
               <div class="body">
-                {'<p class="why">'+e(f.detail)+'</p>' if f.detail else ''}
-                {'<p class="path"><b>Путь:</b> <code>'+e(f.path)+'</code></p>' if f.path else ''}
-                <ul>{ev}</ul>
+                {'<p class="why">' + e(f.detail) + '</p>' if f.detail else ''}
+                {info}
+                <div class="evi"><b>Подробности проверки</b><ul>{ev}</ul></div>
               </div>
             </details>""")
+
         sysrows = "".join(f"<tr><td>{e(str(k))}</td><td>{e(str(v))}</td></tr>"
                           for k, v in self.sysinfo.items())
         counts = "".join(
-            f'<div class="stat"><div class="num" style="color:{sig.SEVERITY_COLOR[s]}">'
-            f'{self.counts.get(s,0)}</div><div class="lbl">{sig.SEVERITY_RU[s]}</div></div>'
-            for s in ("critical", "high", "medium", "low", "info"))
+            f'<div class="stat"><div class="num" style="color:{sig.SEVERITY_COLOR[sv]}">'
+            f'{self.counts.get(sv, 0)}</div><div class="lbl">{sig.SEVERITY_RU[sv]}</div></div>'
+            for sv in ("critical", "high", "medium", "low", "info"))
+
+        filters = ['<button class="fbtn on" data-f="all">Все <b>%d</b></button>' % len(self.findings)]
+        for key in ("disk", "deleted", "renamed", "trace"):
+            if loc_counts.get(key):
+                filters.append('<button class="fbtn" data-f="%s">%s %s <b>%d</b></button>'
+                               % (key, LOCATION_ICON[key], LOCATION_RU[key], loc_counts[key]))
+        sev_filters = ['<button class="sbtn on" data-s="all">Любая важность</button>']
+        for sv in ("critical", "high", "medium", "low", "info"):
+            if self.counts.get(sv):
+                sev_filters.append('<button class="sbtn" data-s="%s" style="--c:%s">%s <b>%d</b></button>'
+                                   % (sv, sig.SEVERITY_COLOR[sv], sig.SEVERITY_RU[sv], self.counts[sv]))
+
         return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mine Checker — {e(self.player)}</title>
 <style>
 *{{box-sizing:border-box}}
 body{{margin:0;background:#0e1117;color:#e6e9f0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}}
-.wrap{{max-width:1000px;margin:0 auto;padding:28px 18px 60px}}
+.wrap{{max-width:1060px;margin:0 auto;padding:28px 18px 60px}}
 h1{{font-size:22px;margin:0 0 4px}}
 .sub{{color:#8b93a7;font-size:13px;margin-bottom:22px}}
 .verdict{{border-radius:16px;padding:22px;background:linear-gradient(135deg,{self.verdict_color}22,#161b26);
@@ -204,17 +229,48 @@ h1{{font-size:22px;margin:0 0 4px}}
 .stat .num{{font-size:26px;font-weight:800}}
 .stat .lbl{{font-size:11px;color:#8b93a7;letter-spacing:.6px}}
 h2{{font-size:15px;color:#8b93a7;text-transform:uppercase;letter-spacing:1px;margin:26px 0 10px}}
+.bar{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}}
+.fbtn,.sbtn{{background:#161b26;border:1px solid #232a3a;color:#c3c9d6;border-radius:20px;
+  padding:7px 14px;font:inherit;font-size:13px;cursor:pointer;transition:.15s}}
+.fbtn b,.sbtn b{{color:#fff;margin-left:3px}}
+.fbtn:hover,.sbtn:hover{{border-color:#3a4761;color:#fff}}
+.fbtn.on{{background:#5b8cff;border-color:#5b8cff;color:#0b0e14;font-weight:600}}
+.fbtn.on b{{color:#0b0e14}}
+.sbtn.on{{background:var(--c,#5b8cff);border-color:var(--c,#5b8cff);color:#0b0e14;font-weight:600}}
+.sbtn.on b{{color:#0b0e14}}
+#q{{flex:1;min-width:190px;background:#161b26;border:1px solid #232a3a;color:#e6e9f0;
+  border-radius:20px;padding:8px 15px;font:inherit;font-size:13px;outline:none}}
+#q:focus{{border-color:#5b8cff}}
+#empty{{display:none;color:#8b93a7;padding:22px;text-align:center;background:#141924;
+  border:1px dashed #232a3a;border-radius:12px}}
 .card{{background:#141924;border:1px solid #232a3a;border-left:4px solid var(--sev);
   border-radius:10px;margin-bottom:8px;overflow:hidden}}
-summary{{cursor:pointer;padding:12px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;list-style:none}}
+.card.hide{{display:none}}
+summary{{cursor:pointer;padding:12px 14px;display:flex;gap:9px;align-items:center;flex-wrap:wrap;list-style:none}}
 summary::-webkit-details-marker{{display:none}}
-.badge{{font-size:10px;font-weight:800;color:#0e1117;padding:3px 8px;border-radius:20px;letter-spacing:.5px}}
+summary:hover{{background:#182031}}
+.badge{{font-size:10px;font-weight:800;color:#0e1117;padding:3px 8px;border-radius:20px;letter-spacing:.5px;white-space:nowrap}}
+.loc{{font-size:11px;color:#8b93a7;background:#1d2432;padding:3px 9px;border-radius:20px;white-space:nowrap}}
 .ttl{{font-weight:600;flex:1;min-width:200px}}
 .cat{{font-size:11px;color:#8b93a7;background:#1d2432;padding:3px 9px;border-radius:20px}}
 .body{{padding:0 14px 14px;border-top:1px solid #232a3a}}
-.why{{color:#c3c9d6;margin:12px 0 8px}}
-.path code{{background:#0b0e14;padding:2px 6px;border-radius:5px;font-size:12px;word-break:break-all}}
-ul{{margin:8px 0 0;padding-left:20px;color:#9aa3b5;font-size:13px}}
+.why{{color:#c3c9d6;margin:12px 0 10px}}
+.fileblock{{background:#0b0e14;border:1px solid #232a3a;border-radius:10px;padding:12px 14px;margin:10px 0}}
+.fileblock .row{{display:flex;gap:10px;padding:4px 0;font-size:13px;flex-wrap:wrap}}
+.fileblock .rk{{color:#8b93a7;min-width:130px}}
+.fileblock .rv{{color:#e6e9f0;word-break:break-all;flex:1}}
+.pathline{{display:flex;gap:8px;align-items:flex-start;margin-bottom:8px}}
+.pathline code{{background:#161b26;padding:6px 10px;border-radius:6px;font-size:12px;
+  word-break:break-all;flex:1;border:1px solid #232a3a}}
+.copy{{background:#1d2432;border:1px solid #232a3a;color:#c3c9d6;border-radius:6px;
+  padding:6px 11px;font-size:12px;cursor:pointer;white-space:nowrap}}
+.copy:hover{{background:#5b8cff;color:#0b0e14;border-color:#5b8cff}}
+.state{{display:inline-block;font-size:12px;padding:3px 10px;border-radius:20px;font-weight:600}}
+.state.gone{{background:#ff8b3d22;color:#ff8b3d;border:1px solid #ff8b3d55}}
+.state.here{{background:#2ecc7122;color:#2ecc71;border:1px solid #2ecc7155}}
+.evi{{margin-top:10px}}
+.evi b{{font-size:12px;color:#8b93a7;text-transform:uppercase;letter-spacing:.5px}}
+ul{{margin:6px 0 0;padding-left:20px;color:#9aa3b5;font-size:13px}}
 li{{margin:3px 0;word-break:break-word}}
 table{{width:100%;border-collapse:collapse;background:#141924;border-radius:10px;overflow:hidden}}
 td{{padding:8px 12px;border-bottom:1px solid #232a3a;font-size:13px}}
@@ -231,11 +287,118 @@ td:first-child{{color:#8b93a7;width:200px}}
   <div><div class="k">Учётная запись</div><div class="v">{e(str(self.sysinfo.get('user','')))}</div></div>
 </div>
 <div class="stats">{counts}</div>
+
 <h2>Находки ({len(self.findings)})</h2>
-{''.join(rows) if rows else '<p style="color:#2ecc71">Ничего не найдено — система чистая.</p>'}
+<div class="bar">{''.join(filters)}<input id="q" placeholder="Поиск по названию или пути…"></div>
+<div class="bar">{''.join(sev_filters)}</div>
+<div id="list">{''.join(rows) if rows else '<p style="color:#2ecc71">Ничего не найдено — система чистая.</p>'}</div>
+<div id="empty">Под выбранные фильтры ничего не подходит.</div>
+
 <h2>Система</h2><table>{sysrows}</table>
 <div class="foot">Mine Checker · проверка проведена с согласия игрока</div>
-</div></body></html>"""
+</div>
+<script>
+(function(){{
+  var loc="all", sev="all";
+  var cards=[].slice.call(document.querySelectorAll(".card"));
+  var q=document.getElementById("q"), empty=document.getElementById("empty");
+
+  function apply(){{
+    var text=(q.value||"").toLowerCase().trim(), shown=0;
+    cards.forEach(function(c){{
+      var ok=(loc==="all"||c.dataset.loc===loc)
+          && (sev==="all"||c.dataset.sev===sev)
+          && (!text||c.dataset.search.indexOf(text)>=0);
+      c.classList.toggle("hide",!ok);
+      if(ok) shown++;
+    }});
+    empty.style.display=shown?"none":"block";
+  }}
+
+  document.querySelectorAll(".fbtn").forEach(function(b){{
+    b.onclick=function(){{
+      document.querySelectorAll(".fbtn").forEach(function(x){{x.classList.remove("on");}});
+      b.classList.add("on"); loc=b.dataset.f; apply();
+    }};
+  }});
+  document.querySelectorAll(".sbtn").forEach(function(b){{
+    b.onclick=function(){{
+      document.querySelectorAll(".sbtn").forEach(function(x){{x.classList.remove("on");}});
+      b.classList.add("on"); sev=b.dataset.s; apply();
+    }};
+  }});
+  q.oninput=apply;
+
+  document.addEventListener("click",function(ev){{
+    var b=ev.target.closest(".copy");
+    if(!b) return;
+    ev.preventDefault();
+    var t=b.getAttribute("data-path");
+    (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){{
+      var old=b.textContent; b.textContent="Скопировано"; setTimeout(function(){{b.textContent=old;}},1200);
+    }}).catch(function(){{
+      var ta=document.createElement("textarea"); ta.value=t; document.body.appendChild(ta);
+      ta.select(); try{{document.execCommand("copy");}}catch(e){{}} document.body.removeChild(ta);
+      var old=b.textContent; b.textContent="Скопировано"; setTimeout(function(){{b.textContent=old;}},1200);
+    }});
+  }});
+}})();
+</script>
+</body></html>"""
+
+    def _file_block(self, f) -> str:
+        """Карточка файла: где лежит, существует ли, когда удалён, размер и хеш."""
+        e = html.escape
+        if not f.path and not f.meta.get("paths"):
+            return ""
+
+        def find_ev(prefix):
+            for x in f.evidence:
+                if isinstance(x, str) and x.startswith(prefix):
+                    return x.split(":", 1)[1].strip()
+            return ""
+
+        exists = bool(f.path) and os.path.exists(f.path)
+        deleted_at = f.meta.get("deleted_at") or find_ev("Удалён")
+
+        if f.location == "deleted":
+            state = ('<span class="state gone">Удалён'
+                     + (f' · {e(deleted_at)}' if deleted_at else '') + '</span>')
+        elif exists:
+            state = '<span class="state here">Файл на месте</span>'
+        elif f.location == "renamed":
+            state = '<span class="state gone">Переименован / замаскирован</span>'
+        else:
+            state = '<span class="state gone">Файла нет по этому пути</span>'
+
+        rows = []
+        folder = os.path.dirname(f.path) if f.path else ""
+        for label, value in (("Папка", folder),
+                             ("Имя файла", os.path.basename(f.path) if f.path else ""),
+                             ("Размер", find_ev("Размер")),
+                             ("Создан", find_ev("Создан")),
+                             ("Изменён", find_ev("Изменён")),
+                             ("Последний доступ", find_ev("Последний доступ")),
+                             ("Удалён", deleted_at),
+                             ("Запускался", find_ev("Последний запуск")),
+                             ("SHA-256", find_ev("SHA-256")),
+                             ("Имя мода внутри", find_ev("Имя мода внутри"))):
+            if value:
+                rows.append(f'<div class="row"><div class="rk">{label}</div>'
+                            f'<div class="rv">{e(str(value))}</div></div>')
+
+        grouped = f.meta.get("paths")
+        if grouped and len(grouped) > 1:
+            items = "".join(f"<li>{e(p)}</li>" for p in grouped[:60])
+            rows.append(f'<div class="row"><div class="rk">Все совпадения</div>'
+                        f'<div class="rv"><ul>{items}</ul></div></div>')
+
+        path_line = ""
+        if f.path:
+            path_line = (f'<div class="pathline"><code>{e(f.path)}</code>'
+                         f'<button class="copy" data-path="{e(f.path)}">Скопировать путь</button></div>')
+
+        return f'<div class="fileblock">{path_line}<div style="margin:6px 0 8px">{state}</div>{"".join(rows)}</div>'
 
 
 def safe_name(text: str) -> str:

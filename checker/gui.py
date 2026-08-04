@@ -192,6 +192,8 @@ class MineCheckerApp:
         ui.button(bar, "Сохранить", self._save_settings, primary=True, width=170).pack(side="left")
         ui.button(bar, "Проверить отправку", self._test_send, primary=False, width=200)\
             .pack(side="left", padx=8)
+        ui.button(bar, "Найти chat_id", self._find_chat, primary=False, width=170)\
+            .pack(side="left")
         ui.button(bar, "Назад", self.screen_setup, primary=False, width=140).pack(side="right")
 
     def _collect_settings(self):
@@ -208,7 +210,38 @@ class MineCheckerApp:
         from .settings import save_user_config
         self._collect_settings()
         path = save_user_config(self.cfg)
-        self.s_status.configure(text=f"✔ Сохранено: {path}")
+        self._status(f"✔ Сохранено: {path}", ok=True)
+
+    def _find_chat(self):
+        """Подставляет chat_id беседы, в которую уже добавлен бот."""
+        self._collect_settings()
+        token = self.cfg.get("telegram", {}).get("bot_token", "")
+        chats, err = senders.telegram_find_chats(token)
+        if err:
+            self._status(err, ok=False)
+            return
+        cid, title = chats[0]
+        widget = self.s_vars.get("telegram.chat_id")
+        if widget is not None:
+            try:
+                widget.delete(0, "end")
+            except Exception:
+                pass
+            widget.insert(0, str(cid))
+            if not ui.HAS_CTK:
+                widget.configure(fg=ui.TEXT)
+        self.cfg["telegram"]["chat_id"] = str(cid)
+        more = f" (ещё бесед: {len(chats) - 1})" if len(chats) > 1 else ""
+        self._status(f"✔ Найдено: {title} → chat_id {cid}{more}. Нажмите «Сохранить».", ok=True)
+
+    def _status(self, text, ok=True):
+        try:
+            if ui.HAS_CTK:
+                self.s_status.configure(text=text, text_color=ui.OK if ok else "#ff4d5e")
+            else:
+                self.s_status.configure(text=text, fg=ui.OK if ok else "#ff4d5e")
+        except Exception:
+            pass
 
     def _test_send(self):
         """Отправляет пустой тестовый отчёт, чтобы сразу увидеть, дошло или нет."""
@@ -223,12 +256,7 @@ class MineCheckerApp:
         paths = report_mod.save_reports(rep, self.out_dir)
         results = senders.deliver(rep, self.cfg, paths)
         ok = all(r[1] for r in results)
-        self.s_status.configure(
-            text=("✔ " if ok else "✖ ") + " · ".join(f"{n}: {m}" for n, _o, m in results),
-            text_color=ui.OK if ok else "#ff4d5e") if ui.HAS_CTK else \
-            self.s_status.configure(
-                text=("✔ " if ok else "✖ ") + " · ".join(f"{n}: {m}" for n, _o, m in results),
-                fg=ui.OK if ok else "#ff4d5e")
+        self._status(("✔ " if ok else "✖ ") + " · ".join(f"{n}: {m}" for n, _o, m in results), ok)
 
     # ==================================================================
     def start(self):
@@ -384,7 +412,11 @@ class MineCheckerApp:
             head = ui.frame(ci, color=ui.CARD, radius=0)
             head.pack(fill="x")
             ui.badge(head, sig.SEVERITY_RU[f.severity], sig.SEVERITY_COLOR[f.severity],
-                     bg=ui.CARD).pack(side="left", padx=(0, 10))
+                     bg=ui.CARD).pack(side="left", padx=(0, 8))
+            loc_ru = {"disk": "💾 На компьютере", "deleted": "🗑 Удалён",
+                      "renamed": "🎭 Переименован", "trace": "👣 След"}
+            ui.label(head, loc_ru.get(f.location, ""), size=10, color=ui.MUTED,
+                     bg=ui.CARD).pack(side="left", padx=(0, 8))
             ui.label(head, f.title, size=13, weight="bold", bg=ui.CARD, wraplength=700)\
                 .pack(side="left", anchor="w")
             sub = f"{f.category}" + (f"  ·  {f.path}" if f.path else "")
@@ -392,6 +424,10 @@ class MineCheckerApp:
             if f.evidence:
                 ui.label(ci, "   ".join(str(x)[:90] for x in f.evidence[:3]),
                          size=10, color="#6f7788", bg=ui.CARD, wraplength=880).pack(anchor="w")
+            hint = ("нажмите, чтобы открыть папку с файлом" if f.location == "disk"
+                    else "нажмите, чтобы увидеть полную информацию")
+            ui.label(ci, hint, size=9, color="#4a5163", bg=ui.CARD).pack(anchor="w", pady=(3, 0))
+            self._bind_click(card, f)
 
         # кнопки
         bar = ui.frame(root, color=ui.BG, radius=0)
@@ -404,6 +440,84 @@ class MineCheckerApp:
             .pack(side="right")
 
     # ==================================================================
+    def _bind_click(self, widget, finding):
+        """Клик по находке: файл на месте — открываем папку, иначе показываем карточку."""
+        def handler(_event=None):
+            if finding.location == "disk" and finding.path and os.path.exists(finding.path):
+                self.reveal(finding.path)
+            else:
+                self.show_finding(finding)
+
+        def walk(w):
+            try:
+                w.bind("<Button-1>", handler)
+            except Exception:
+                pass
+            for child in getattr(w, "winfo_children", lambda: [])():
+                walk(child)
+        walk(widget)
+
+    def reveal(self, path):
+        """Показать файл в проводнике/Finder."""
+        try:
+            if pi.WINDOWS:
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+            elif pi.MACOS:
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception:
+            self.show_finding_path(path)
+
+    def show_finding(self, f):
+        """Окно с полной информацией о находке: где лежала, когда удалена, хеш."""
+        win = tk.Toplevel(self.win)
+        win.title(f.title[:70])
+        win.geometry("760x520")
+        win.configure(bg=ui.BG)
+        root = ui.frame(win, color=ui.BG, radius=0)
+        root.pack(fill="both", expand=True, padx=22, pady=18)
+
+        ui.badge(root, sig.SEVERITY_RU[f.severity], sig.SEVERITY_COLOR[f.severity],
+                 bg=ui.BG).pack(anchor="w")
+        ui.label(root, f.title, size=16, weight="bold", wraplength=700).pack(anchor="w", pady=(8, 2))
+        loc_ru = {"disk": "Файл на компьютере", "deleted": "Файл удалён",
+                  "renamed": "Файл переименован или замаскирован", "trace": "Косвенный след"}
+        ui.label(root, f"{f.category}  ·  {loc_ru.get(f.location, '')}",
+                 size=12, color=ui.MUTED).pack(anchor="w", pady=(0, 10))
+        if f.detail:
+            ui.label(root, f.detail, size=12, color="#c3c9d6", wraplength=700).pack(anchor="w", pady=(0, 10))
+
+        box = ui.textbox(root, height=280)
+        box.pack(fill="both", expand=True)
+        lines = []
+        if f.path:
+            lines += [f"Путь:  {f.path}",
+                      f"Папка: {os.path.dirname(f.path)}",
+                      f"Имя:   {os.path.basename(f.path)}",
+                      f"Сейчас на диске: {'да' if os.path.exists(f.path) else 'НЕТ — файла там больше нет'}",
+                      ""]
+        if f.meta.get("deleted_at"):
+            lines += [f"Удалён: {f.meta['deleted_at']}", ""]
+        lines += [str(x) for x in f.evidence]
+        for line in lines:
+            ui.textbox_append(box, line)
+
+        bar = ui.frame(root, color=ui.BG, radius=0)
+        bar.pack(fill="x", pady=(12, 0))
+        if f.path and os.path.exists(f.path):
+            ui.button(bar, "Открыть папку", lambda: self.reveal(f.path), primary=True,
+                      width=170).pack(side="left")
+        if f.path:
+            ui.button(bar, "Скопировать путь",
+                      lambda: (self.win.clipboard_clear(), self.win.clipboard_append(f.path)),
+                      primary=False, width=190).pack(side="left", padx=8)
+        ui.button(bar, "Закрыть", win.destroy, primary=False, width=130).pack(side="right")
+
+    def show_finding_path(self, path):
+        self.win.clipboard_clear()
+        self.win.clipboard_append(path)
+
     def open_html(self):
         p = self.paths.get("html")
         if p and os.path.exists(p):

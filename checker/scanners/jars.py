@@ -44,10 +44,13 @@ def _read_capped(zf, name, cap=MAX_ENTRY_BYTES):
 
 class JarVerdict:
     def __init__(self):
-        self.client_hits = {}     # имя клиента -> [где нашли]
-        self.modules = set()      # найденные читерские модули
+        self.client_hits = {}      # имя клиента -> [где нашли]
+        self.modules = set()       # все найденные читерские модули
+        self.modules_names = set() # модули, найденные в ИМЕНАХ классов - надёжный признак
+        self.modules_text = set()  # модули, встреченные в строковых константах - слабый
         self.agent = []           # ключи java-агента
-        self.declared_name = ""   # имя из fabric.mod.json / mods.toml
+        self.declared_name = ""    # имя из fabric.mod.json / mods.toml
+        self.has_mod_meta = False  # есть паспорт обычного мода
         self.obfuscated = False
         self.entry_count = 0
         self.error = ""
@@ -85,8 +88,15 @@ def analyze_jar(path: str, max_size_mb: int = 400) -> JarVerdict:
             if marker in joined:
                 v.client_hits.setdefault(client, []).append(f"пакет/ресурс: {marker}")
 
+        # Модуль засчитывается, если так называется САМ КЛАСС (KillAura.class),
+        # а не если слово просто встретилось где-то в ресурсах: у обычных модов
+        # вроде Chisel строка "scaffold" есть, а класса Scaffold - нет.
+        class_stems = {os.path.splitext(os.path.basename(n))[0].lower()
+                       for n in names if n.lower().endswith(".class")}
+        pkg_parts = {seg.lower() for n in names for seg in n.split("/")[:-1]}
         for mod in sig.HEUR_MODULES:
-            if mod in joined:
+            if mod in class_stems or mod in pkg_parts:
+                v.modules_names.add(mod)
                 v.modules.add(mod)
 
         for name in names:
@@ -105,6 +115,7 @@ def analyze_jar(path: str, max_size_mb: int = 400) -> JarVerdict:
                 raw = _read_capped(zf, name, 200_000).decode("utf-8", "replace")
                 if not raw:
                     continue
+                v.has_mod_meta = True
                 v.declared_name = v.declared_name or _extract_mod_name(base, raw)
                 _scan_text(raw, v, f"метаданные {base}")
 
@@ -147,15 +158,24 @@ def _extract_mod_name(base: str, raw: str) -> str:
 
 
 def _scan_text(text: str, v: JarVerdict, where: str):
+    """
+    Разбор строковых констант.
+
+    Здесь ищем только маркеры-пути пакетов (net/wurstclient и т.п.): одиночные
+    английские слова внутри чужого кода ничего не доказывают - именно на них
+    раньше срабатывали ложные находки в обычных модах.
+    """
     low = text.lower()
     for marker, (client, _s, _c) in MARKERS.items():
+        if "/" not in marker or len(marker) < 10:
+            continue
         if marker in low:
             hits = v.client_hits.setdefault(client, [])
             if len(hits) < 6:
                 hits.append(f"{where}: {marker}")
     for mod in sig.HEUR_MODULES:
         if mod in low:
-            v.modules.add(mod)
+            v.modules_text.add(mod)
 
 
 def jar_findings(path: str, origin: str = "", deep: bool = True, max_size_mb: int = 400):
@@ -224,20 +244,26 @@ def jar_findings(path: str, origin: str = "", deep: bool = True, max_size_mb: in
                     path=path,
                     evidence=[f"{k}: {val}" for k, val in common.items()] + where[:6]))
 
-    # 2) эвристика: набор читерских модулей при неизвестном имени
-    if not real_clients and len(v.modules) >= sig.HEUR_THRESHOLD and not whitelisted:
-        strong = len(v.modules) >= sig.HEUR_THRESHOLD_STRONG
-        mods = sorted(v.modules)
-        out.append(Finding(
-            title=f"Неизвестный чит-клиент в «{base}» ({len(mods)} читерских модулей)",
-            severity="critical" if strong else "high",
-            category=sig.CAT_CLIENT,
-            detail=("В архиве найдены названия читерских функций, хотя в базе такого клиента нет. "
-                    "Так выглядят приватные, новые или переименованные читы."),
-            path=path,
-            evidence=[f"{k}: {val}" for k, val in common.items()]
-                     + ["Модули: " + ", ".join(mods[:30])],
-            meta={"modules": mods}))
+    # 2) эвристика для неизвестных/приватных читов.
+    #    Считаем только модули, названные так в ИМЕНАХ классов: у чит-клиента
+    #    есть класс KillAura, а у обычного мода слово killaura может встретиться
+    #    разве что случайно в строке. Для jar с нормальным паспортом мода
+    #    (fabric.mod.json / mods.toml) порог выше - там ложные совпадения вероятнее.
+    if not real_clients and not whitelisted:
+        threshold = sig.HEUR_THRESHOLD + (3 if v.has_mod_meta else 0)
+        mods = sorted(v.modules_names)
+        if len(mods) >= threshold:
+            strong = len(mods) >= sig.HEUR_THRESHOLD_STRONG
+            out.append(Finding(
+                title=f"Неизвестный чит-клиент в «{base}» ({len(mods)} читерских модулей)",
+                severity="critical" if strong else "high",
+                category=sig.CAT_CLIENT,
+                detail=("Классы внутри архива названы как функции чита, хотя такого клиента "
+                        "нет в базе. Так выглядят приватные, новые или переименованные читы."),
+                path=path,
+                evidence=[f"{k}: {val}" for k, val in common.items()]
+                         + ["Классы-модули: " + ", ".join(mods[:30])],
+                meta={"modules": mods}))
 
     # 3) java-агент
     if v.agent and not whitelisted:

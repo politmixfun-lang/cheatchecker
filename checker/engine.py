@@ -115,6 +115,8 @@ def run_check(player: str, admin: str, cfg: dict, progress_cb=None) -> Report:
 
     progress.step(0.96, "Формирую отчёт…")
     findings = _dedup(findings)
+    _classify(findings)
+    findings = _group(findings)
     finished = time.time()
     return Report(player, admin, sysinfo, findings, stats, started, finished)
 
@@ -155,4 +157,78 @@ def _recent_activity(findings, started, window_min=30):
             detail=f"Эти объекты изменялись в последние {window_min} минут — "
                    "вероятна попытка спрятать или удалить чит перед проверкой.",
             evidence=hot[:20]))
+    return out
+
+
+LOCATION_RU = {"disk": "На компьютере", "deleted": "Удалённые",
+               "renamed": "Переименованные", "trace": "Следы"}
+
+_DELETED_MARKS = ("$recycle.bin", "/.trash", "\\.trash", ".trashes")
+
+
+def _classify(findings):
+    """Проставляет каждой находке, где именно объект: на диске, удалён, переименован."""
+    for f in findings:
+        low = (f.path or "").lower()
+        title = f.title.lower()
+
+        if f.meta.get("renamed") or "замаскированн" in title or "чужим расширением" in title:
+            f.location = "renamed"
+        elif any(m in low for m in _DELETED_MARKS) or "удалён" in title or "корзин" in title:
+            f.location = "deleted"
+        elif f.category == sig.CAT_TRACE:
+            f.location = "deleted" if ("удал" in title or "корзин" in title) else "trace"
+        elif f.path and os.path.exists(f.path):
+            f.location = "disk"
+        elif f.path:
+            f.location = "deleted"     # путь есть, а файла нет - значит его убрали
+        else:
+            f.location = "trace"
+
+        # для удалённых вытаскиваем время удаления в отдельное поле
+        for e in f.evidence:
+            if isinstance(e, str) and e.startswith("Удалён:"):
+                f.meta["deleted_at"] = e.split(":", 1)[1].strip()
+                break
+
+
+# Категории, где десяток одинаковых находок - это шум, а не улики
+_GROUPABLE = {sig.CAT_GREY, sig.CAT_MACRO, sig.CAT_SYS, sig.CAT_PROC, sig.CAT_MC}
+
+
+def _group(findings, min_group=3):
+    """
+    Схлопывает повторы одной сигнатуры в одну находку со списком путей.
+
+    Двадцать строк «Logitech G HUB» по разным файлам ничего не добавляют —
+    админу нужен один пункт со списком, а не двадцать одинаковых карточек.
+    """
+    buckets, order = {}, []
+    for f in findings:
+        name = f.title.split(" — ")[0].strip()
+        key = (name, f.category, f.severity, f.location)
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(f)
+
+    out = []
+    for key in order:
+        group = buckets[key]
+        name, category, severity, location = key
+        threshold = min_group if category in _GROUPABLE else min_group * 2
+        if len(group) < threshold:
+            out.extend(group)
+            continue
+        paths = [g.path or g.title for g in group]
+        merged = Finding(
+            title=f"{name} — найдено объектов: {len(group)}",
+            severity=severity, category=category,
+            detail=(group[0].detail or "") + f" Совпадений: {len(group)}, все перечислены ниже.",
+            path=group[0].path,
+            evidence=[f"{i}. {p}" for i, p in enumerate(paths[:60], 1)]
+                     + ([f"… и ещё {len(paths) - 60}"] if len(paths) > 60 else []),
+            meta={"grouped": len(group), "paths": paths[:200]})
+        merged.location = location
+        out.append(merged)
     return out

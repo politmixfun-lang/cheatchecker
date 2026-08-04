@@ -67,6 +67,12 @@ class Finding:
     path: str = ""                   # где найдено
     evidence: list = field(default_factory=list)   # доказательства (строки)
     meta: dict = field(default_factory=dict)
+    # где объект находится - по этому полю работают фильтры в отчёте:
+    #   disk    - файл лежит на компьютере прямо сейчас
+    #   deleted - удалён (Корзина, следы удаления)
+    #   renamed - переименован или замаскирован под другое расширение
+    #   trace   - косвенный след (реестр, лог, история)
+    location: str = "trace"
 
     @property
     def weight(self) -> int:
