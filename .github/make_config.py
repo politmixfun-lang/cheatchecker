@@ -27,6 +27,7 @@ cfg["discord"] = {"enabled": bool(webhook), "webhook_url": webhook,
 with open(os.path.join(BASE, "config.json"), "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-print("config.json собран. Telegram: %s, Discord: %s"
-      % ("настроен" if cfg["telegram"]["enabled"] else "пусто",
-         "настроен" if cfg["discord"]["enabled"] else "пусто"))
+# Вывод только латиницей: консоль Windows на раннере работает в cp1252
+# и падает с UnicodeEncodeError на кириллице.
+print("config.json ready. telegram=%s discord=%s"
+      % (cfg["telegram"]["enabled"], cfg["discord"]["enabled"]))
