@@ -25,10 +25,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter
 
-      - name: Настройки (если не закоммичены)
+      - name: Настройки из секретов репозитория
         shell: bash
-        run: |
-          if [ ! -f config.json ]; then cp config.example.json config.json; fi
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python .github/make_config.py
 
       - name: Сборка
         env:
@@ -63,9 +66,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller customtkinter
 
-      - name: Настройки (если не закоммичены)
-        run: |
-          if [ ! -f config.json ]; then cp config.example.json config.json; fi
+      - name: Настройки из секретов репозитория
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python .github/make_config.py
 
       - name: Сборка
         run: python build.py
