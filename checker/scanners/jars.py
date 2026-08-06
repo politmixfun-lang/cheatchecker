@@ -265,13 +265,16 @@ def jar_findings(path: str, origin: str = "", deep: bool = True, max_size_mb: in
                          + ["Классы-модули: " + ", ".join(mods[:30])],
                 meta={"modules": mods}))
 
-    # 3) java-агент
-    if v.agent and not whitelisted:
+    # 3) java-агент — но только если это НЕ штатная библиотека и НЕ системный JRE.
+    #    Premain-Class есть у множества легитимных агентов (lombok, kotlin,
+    #    management-agent.jar в самой Java, jacoco, byte-buddy...). Флагаем лишь
+    #    когда агент лежит в папке модов / версии игры или его имя из чит-базы.
+    if v.agent and not whitelisted and _agent_is_suspicious(path, base):
         out.append(Finding(
             title=f"Java-агент в «{base}» (инъекция в игру)",
             severity="critical", category=sig.CAT_INJECT,
-            detail=("В манифесте объявлен Premain/Agent-Class. Такой .jar подключается к уже "
-                    "запущенной игре через -javaagent и подменяет код — типичный ghost-клиент."),
+            detail=("В манифесте объявлен Premain/Agent-Class, и файл лежит там, где его "
+                    "быть не должно (папка модов/версии). Так работает ghost-клиент."),
             path=path,
             evidence=[f"{k}: {val}" for k, val in common.items()] + v.agent[:6]))
 
@@ -285,6 +288,35 @@ def jar_findings(path: str, origin: str = "", deep: bool = True, max_size_mb: in
             path=path,
             evidence=[f"{k}: {val}" for k, val in common.items()]))
     return out
+
+
+# Легитимные библиотеки/агенты — у них тоже бывает Premain-Class, но это не читы.
+_AGENT_WHITELIST = (
+    "lombok", "kotlin", "kotlinx", "jetbrains", "byte-buddy", "bytebuddy", "mockito",
+    "jacoco", "aspectj", "spring-instrument", "jansi", "idea_rt", "idea-rt",
+    "management-agent", "jconsole", "javassist", "asm-", "log4j", "slf4j", "guava",
+    "gson", "netty", "fastutil", "authlib", "brigadier", "datafixerupper", "oshi",
+    "lwjgl", "jna", "jopt", "commons-", "annotations", "mixin", "fabric", "forge",
+    "sponge", "mixinextras", "nightconfig", "jarjar", "coroutines", "reflections",
+    "opentest4j", "junit", "hamcrest", "jsr305", "checker-qual", "error_prone",
+)
+
+# Каталоги, где java-агент = чит. В самом JRE, в зависимостях лаунчера
+# (.tlauncher/dependencies) или в maven-кэше агент — это норма.
+_AGENT_HOT_DIRS = ("mods", "coremods", "versions")
+_AGENT_SAFE_DIRS = ("jre", "jdk", "\\lib\\", "/lib/", "dependencies", "libraries",
+                    ".m2", ".gradle", "runtime", "bin\\", "/bin/")
+
+
+def _agent_is_suspicious(path: str, base: str) -> bool:
+    low = base.lower()
+    if any(w in low for w in _AGENT_WHITELIST):
+        return False
+    p = path.replace("\\", "/").lower()
+    if any(s.replace("\\", "/") in p for s in _AGENT_SAFE_DIRS):
+        return False
+    parts = p.split("/")
+    return any(d in parts for d in _AGENT_HOT_DIRS)
 
 
 def looks_like_jar(path: str) -> bool:

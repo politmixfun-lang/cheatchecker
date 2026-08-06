@@ -14,8 +14,8 @@ from . import signatures as sig
 from .utils import Finding
 
 LOCATION_RU = {"disk": "На компьютере", "deleted": "Удалён",
-               "renamed": "Переименован", "trace": "След"}
-LOCATION_ICON = {"disk": "💾", "deleted": "🗑", "renamed": "🎭", "trace": "👣"}
+               "renamed": "Переименован", "trace": "След", "usb": "На USB"}
+LOCATION_ICON = {"disk": "💾", "deleted": "🗑", "renamed": "🎭", "trace": "👣", "usb": "🔌"}
 
 VERDICTS = {
     "clean":     ("ЧИСТО",              "#2ecc71", "Читов не обнаружено."),
@@ -198,7 +198,7 @@ class Report:
             for sv in ("critical", "high", "medium", "low", "info"))
 
         filters = ['<button class="fbtn on" data-f="all">Все <b>%d</b></button>' % len(self.findings)]
-        for key in ("disk", "deleted", "renamed", "trace"):
+        for key in ("disk", "usb", "deleted", "renamed", "trace"):
             if loc_counts.get(key):
                 filters.append('<button class="fbtn" data-f="%s">%s %s <b>%d</b></button>'
                                % (key, LOCATION_ICON[key], LOCATION_RU[key], loc_counts[key]))

@@ -38,11 +38,72 @@ def _multipart(fields: dict, files: list):
     return bytes(body), f"multipart/form-data; boundary={boundary}"
 
 
-def _post(url, data, content_type, timeout=60):
+def _post(url, data, content_type, timeout=120):
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"Content-Type": content_type, "User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.status, resp.read().decode("utf-8", "replace")[:400]
+        return resp.status, resp.read().decode("utf-8", "replace")[:600]
+
+
+def _post_retry(url, data, content_type, timeout=120, tries=4):
+    """
+    POST с повтором при 429 (flood control Telegram) и сетевых сбоях.
+
+    В группу уходят подряд текст + два файла; Telegram на пачку запросов отвечает
+    429 с retry_after. Без повтора именно документы терялись, а текст успевал уйти.
+    """
+    import time
+    last = "нет ответа"
+    for attempt in range(tries):
+        try:
+            return _post(url, data, content_type, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")
+            last = f"HTTP {e.code} — {body[:200]}"
+            if e.code == 429:
+                wait = 3
+                try:
+                    wait = int(json.loads(body).get("parameters", {}).get("retry_after", 3))
+                except Exception:
+                    pass
+                time.sleep(min(wait + 1, 30))
+                continue
+            if 500 <= e.code < 600:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return e.code, body
+        except Exception as e:            # таймаут/обрыв сети — ещё попытка
+            last = str(e)
+            time.sleep(2 * (attempt + 1))
+    return 0, last
+
+
+def _ascii_name(name: str) -> str:
+    """
+    ASCII-имя файла для multipart.
+
+    Имя вроде «check_Ярослав.txt» в заголовке Content-Disposition некоторые
+    промежуточные узлы Telegram обрабатывают неверно, и документ не доходит.
+    Кириллицу транслитерируем, всё прочее заменяем на подчёркивание.
+    """
+    table = {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+        "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+        "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "c",
+        "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    }
+    out = []
+    for ch in name:
+        low = ch.lower()
+        if low in table:
+            t = table[low]
+            out.append(t.upper() if ch.isupper() else t)
+        elif ch.isascii() and (ch.isalnum() or ch in "._-"):
+            out.append(ch)
+        else:
+            out.append("_")
+    res = "".join(out).strip("_") or "report"
+    return res
 
 
 def _read(path, limit_mb=8):
@@ -154,36 +215,26 @@ def send_telegram(report: Report, cfg: dict, attachments: list):
 
     base = f"https://api.telegram.org/bot{token}"
     ok_all, msgs = True, []
-    try:
-        payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                              "disable_web_page_preview": True}).encode()
-        status, _ = _post(base + "/sendMessage", payload, "application/json")
-        ok_all &= 200 <= status < 300
-        msgs.append(f"сообщение: HTTP {status}")
-    except urllib.error.HTTPError as e:
-        ok_all = False
-        msgs.append(f"сообщение: HTTP {e.code} — {e.read()[:180].decode('utf-8','replace')}")
-    except Exception as e:
-        ok_all = False
-        msgs.append(f"сообщение: {e}")
+
+    payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                          "disable_web_page_preview": True}).encode()
+    status, resp = _post_retry(base + "/sendMessage", payload, "application/json")
+    ok = 200 <= status < 300
+    ok_all &= ok
+    msgs.append(f"сообщение: HTTP {status}" + ("" if ok else f" — {resp[:150]}"))
 
     for path in attachments:
         if not os.path.isfile(path):
             continue
-        try:
-            data, ctype = _multipart(
-                {"chat_id": chat_id,
-                 "caption": f"Отчёт: {report.player} — {report.verdict_label}"},
-                [("document", os.path.basename(path), _read(path, limit_mb=45))])
-            status, _ = _post(base + "/sendDocument", data, ctype)
-            ok_all &= 200 <= status < 300
-            msgs.append(f"{os.path.basename(path)}: HTTP {status}")
-        except urllib.error.HTTPError as e:
-            ok_all = False
-            msgs.append(f"{os.path.basename(path)}: HTTP {e.code}")
-        except Exception as e:
-            ok_all = False
-            msgs.append(f"{os.path.basename(path)}: {e}")
+        fname = _ascii_name(os.path.basename(path))
+        data, ctype = _multipart(
+            {"chat_id": chat_id,
+             "caption": f"Otchet: {_ascii_name(report.player)} — {report.verdict_label}"[:1000]},
+            [("document", fname, _read(path, limit_mb=45))])
+        status, resp = _post_retry(base + "/sendDocument", data, ctype)
+        ok = 200 <= status < 300
+        ok_all &= ok
+        msgs.append(f"{fname}: HTTP {status}" + ("" if ok else f" — {resp[:150]}"))
     return ok_all, "Telegram: " + "; ".join(msgs)
 
 

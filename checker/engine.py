@@ -61,7 +61,7 @@ def run_check(player: str, admin: str, cfg: dict, progress_cb=None) -> Report:
             evidence=["Проверены стандартные пути для " + sysinfo["os"]]))
 
     # --- 2. Файловая система ---------------------------------------------
-    roots = pi.scan_roots()
+    roots = pi.scan_roots(cfg)
     roots += [(p, 6) for p in scan_cfg.get("extra_paths", []) if p and os.path.isdir(p)]
     progress.step(0.10, f"Сканирую диск ({len(roots)} корней)…")
     f, s = files_scanner.scan_filesystem(
@@ -164,6 +164,21 @@ LOCATION_RU = {"disk": "На компьютере", "deleted": "Удалённы
                "renamed": "Переименованные", "trace": "Следы"}
 
 _DELETED_MARKS = ("$recycle.bin", "/.trash", "\\.trash", ".trashes")
+_REMOVABLE_ROOTS = None
+
+
+def _is_removable(path):
+    """Лежит ли путь на съёмном носителе (USB-флешке)."""
+    global _REMOVABLE_ROOTS
+    if not path:
+        return False
+    if _REMOVABLE_ROOTS is None:
+        try:
+            _REMOVABLE_ROOTS = [r.lower() for r in pi.removable_drives()]
+        except Exception:
+            _REMOVABLE_ROOTS = []
+    low = path.lower()
+    return any(low.startswith(r.lower()) for r in _REMOVABLE_ROOTS)
 
 
 def _classify(findings):
@@ -172,10 +187,14 @@ def _classify(findings):
         low = (f.path or "").lower()
         title = f.title.lower()
 
+        on_usb = _is_removable(f.path)
+
         if f.meta.get("renamed") or "замаскированн" in title or "чужим расширением" in title:
             f.location = "renamed"
         elif any(m in low for m in _DELETED_MARKS) or "удалён" in title or "корзин" in title:
             f.location = "deleted"
+        elif on_usb and f.path and os.path.exists(f.path):
+            f.location = "usb"
         elif f.category == sig.CAT_TRACE:
             f.location = "deleted" if ("удал" in title or "корзин" in title) else "trace"
         elif f.path and os.path.exists(f.path):

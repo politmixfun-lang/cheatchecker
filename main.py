@@ -37,6 +37,9 @@ DEFAULT_CONFIG = {
         "max_findings": 5000,
         "usn_journal": False,        # журнал USN даёт больше следов, но добавляет минуты
         "spotlight": True,
+        "all_users": True,           # проверять все учётные записи компьютера
+        "usb": True,                 # проверять подключённые USB + историю флешек
+        "all_drives": False,         # обходить все диски целиком (медленно) — по желанию
         "extra_paths": [],
     },
 }

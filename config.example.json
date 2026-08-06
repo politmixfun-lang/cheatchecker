@@ -25,6 +25,9 @@
     "max_findings": 5000,
     "usn_journal": false,
     "spotlight": true,
-    "extra_paths": []
+    "extra_paths": [],
+    "all_users": true,
+    "usb": true,
+    "all_drives": false
   }
 }

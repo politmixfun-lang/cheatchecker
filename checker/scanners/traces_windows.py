@@ -279,6 +279,62 @@ def journal_deleted(findings):
 
 
 # ---------------------------------------------------------------------------
+def usb_history(matcher, findings):
+    """
+    Все USB-накопители, которые когда-либо подключались, — даже если сейчас
+    отключены. Windows хранит их в реестре USBSTOR: модель, серийник, время.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return
+    devices = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Enum\USBSTOR") as key:
+            i = 0
+            while True:
+                try:
+                    cls = winreg.EnumKey(key, i)
+                except OSError:
+                    break
+                i += 1
+                # cls вида Disk&Ven_SanDisk&Prod_Cruzer&Rev_1.00
+                model = cls.replace("Disk&", "").replace("Ven_", "").replace("Prod_", " ")\
+                           .replace("Rev_", " rev ").replace("&", " ").strip()
+                try:
+                    with winreg.OpenKey(key, cls) as sub:
+                        j = 0
+                        while True:
+                            try:
+                                serial = winreg.EnumKey(sub, j)
+                            except OSError:
+                                break
+                            j += 1
+                            friendly = model
+                            try:
+                                with winreg.OpenKey(sub, serial) as inst:
+                                    friendly = winreg.QueryValueEx(inst, "FriendlyName")[0]
+                            except OSError:
+                                pass
+                            devices.append((friendly, model, serial))
+                except OSError:
+                    continue
+    except OSError:
+        return
+
+    if devices:
+        ev = [f"{fr}  (серийник: {ser[:40]})" for fr, mdl, ser in devices[:40]]
+        findings.append(Finding(
+            title=f"История USB-накопителей: {len(devices)} устройств",
+            severity="info", category=sig.CAT_SYS,
+            detail="Все флешки и внешние диски, подключавшиеся к этому компьютеру. "
+                   "Если чит запускали с флешки, она осталась в списке даже после отключения.",
+            path=r"HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR",
+            evidence=ev))
+
+
+# ---------------------------------------------------------------------------
 def scan(progress, deep_usn=True):
     matcher = SignatureMatcher()
     findings = []
@@ -290,7 +346,9 @@ def scan(progress, deep_usn=True):
     recent_and_jumplists(matcher, findings)
     progress.step(0.85, "Реестр: BAM / UserAssist / MUICache…")
     registry_traces(matcher, findings)
-    progress.step(0.88, "Журнал файловой системы USN…")
+    progress.step(0.87, "История подключённых USB-накопителей…")
+    usb_history(matcher, findings)
+    progress.step(0.89, "Журнал файловой системы USN…")
     journal_deleted(findings)
     usn_journal(matcher, findings, enabled=deep_usn)
     return findings, {}

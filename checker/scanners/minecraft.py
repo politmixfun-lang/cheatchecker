@@ -280,20 +280,27 @@ def _scan_logs(mc):
         low = text.lower()
         hits = {}
         for kw in sig.LOG_KEYWORDS:
-            idx = low.find(kw)
-            if idx == -1:
-                continue
-            line = text[max(0, text.rfind("\n", 0, idx) + 1): text.find("\n", idx)][:300]
-            hits.setdefault(kw, line.strip())
+            start = 0
+            while True:
+                idx = low.find(kw, start)
+                if idx == -1:
+                    break
+                start = idx + len(kw)
+                nl = text.rfind("\n", 0, idx) + 1
+                end = text.find("\n", idx)
+                line = text[nl: end if end != -1 else idx + 200][:300]
+                # строка обычного мода, где слово встретилось случайно, — пропускаем
+                if any(b in line.lower() for b in sig.LOG_BENIGN_HINTS):
+                    continue
+                hits.setdefault(kw, line.strip())
+                break
         if hits:
-            sev = "critical" if any(k in hits for k in
-                                    ("wurst", "meteor", "impact", "liquidbounce", "vape",
-                                     "killaura", "javaagent", "premain", "nursultan",
-                                     "expensive", "rockstar")) else "medium"
+            sev = "critical"  # маркеры теперь специфичны: любое попадание = чит
             found.append(Finding(
                 title=f"Следы чита в логе: {os.path.basename(path)}",
                 severity=sev, category=sig.CAT_TRACE,
-                detail="Лог игры сохранил упоминание чита. Логи остаются даже после удаления самого чита.",
+                detail="Лог игры сохранил упоминание конкретного чит-клиента. "
+                       "Логи остаются даже после удаления самого чита.",
                 path=path,
                 evidence=[f"Изменён: {fmt_time(file_stat(path)['mtime'])}"]
                          + [f"[{k}] {v}" for k, v in list(hits.items())[:12]]))

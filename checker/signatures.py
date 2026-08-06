@@ -309,13 +309,27 @@ BAD_JVM_ARGS = [
     "-dfml.coremods.load", "-dloader.", "--add-opens java.base/java.lang=all-unnamed",
 ]
 
-# Ключевые слова для поиска в логах Minecraft
+# Маркеры читов для поиска в логах Minecraft.
+# ВАЖНО: только специфичные строки, которые пишут в лог именно чит-клиенты.
+# Раньше здесь были общие слова (impact, injected, transformer, future, cheat,
+# hack) — они ловили обычные моды: "mediumStressImpact" (Create), "recipes will
+# be injected", "coremod transformer" и т.п. Теперь берём имена, которые не
+# встречаются в логах легитимных модов.
 LOG_KEYWORDS = [
-    "wurst", "meteor", "impact", "liquidbounce", "aristois", "future", "sigma", "vape",
-    "rusherhack", "baritone", "killaura", "autoclicker", "xray", "kamiblue", "seppuku",
-    "gamesense", "forgehax", "bleachhack", "nursultan", "expensive", "rockstar", "celestial",
-    "prestige", "nightmare", "cheat", "hack", "injected", "premain", "javaagent",
-    "transformer", "mixin apply failed", "unknown mod",
+    "wurst", "wurstclient", "meteor-client", "meteordevelopment", "liquidbounce",
+    "ccbluex", "aristois", "rusherhack", "kamiblue", "seppuku", "gamesense",
+    "forgehax", "bleachhack", "nursultan", "expensive client", "rockstar client",
+    "celestial client", "prestige client", "nightmare client", "vapeclient",
+    "vape-client", "sigma client", "sigmaclient", "future client", "futureclient",
+    "impact client", "impactclient", "baritone", "killaura", "aimbot", "autoclicker",
+    "x-ray", "xray ", "no-slowdown", "scaffoldwalk",
+]
+
+# Слова, которые часто встречаются в логах ОБЫЧНЫХ модов и не должны учитываться
+# как признак чита, даже если оказались рядом с маркером.
+LOG_BENIGN_HINTS = [
+    "stressimpact", "will be injected", "coremod", "transformer", "mixin",
+    "completablefuture", "futuretask", "in the future", "optifine",
 ]
 
 # Резалки: расширения, которые обычно не бывают jar-ом (для поиска маскировки)
